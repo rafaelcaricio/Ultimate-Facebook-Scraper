@@ -508,7 +508,7 @@ def scrap_profile(ids):
         print("Friends..")
         # setting parameters for scrap_data() to scrap friends
         scan_list = ["All", "Mutual Friends", "Following", "Followers", "Work", "College", "Current City", "Hometown"]
-        section = ["/friends", "friends_mutual", "/following", "/followers", "/friends_work", "/friends_college", "/friends_current_city",
+        section = ["/friends", "/friends_mutual", "/following", "/followers", "/friends_work", "/friends_college", "/friends_current_city",
                    "/friends_hometown"]
         elements_path = ["//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
         				 "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
@@ -618,9 +618,9 @@ def login(email, password):
         try:
             platform_ = platform.system().lower()
             if platform_ in ['linux', 'darwin']:
-                driver = webdriver.Chrome(executable_path="./chromedriver", options=options)
+                driver = webdriver.Chrome(executable_path="chromedriver", options=options)
             else:
-                driver = webdriver.Chrome(executable_path="./chromedriver.exe", options=options)
+                driver = webdriver.Chrome(executable_path="chromedriver.exe", options=options)
         except:
             print("Kindly replace the Chrome Web Driver with the latest one from "
                   "http://chromedriver.chromium.org/downloads"

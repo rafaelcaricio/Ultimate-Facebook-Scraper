@@ -1,6 +1,8 @@
 src/config.py
 src/Data
+Data
 src/input.txt
+input.txt
 
 build/
 __pycache__
