@@ -1,6 +1,48 @@
-/Code/config.py
-/Code/Data
-__pycache__/
+src/config.py
+src/Data
+src/input.txt
+
+build/
+__pycache__
+*.py[cod]
+*~
+@*
+/build
+/env*/
+docs/build/
+*.iml
+/out/
+.venv*/
+.mypy_cache/
+.incremental_checker_cache.json
+.cache
+dmypy.json
+.dmypy.json
+
+# Packages
+*.egg
+*.egg-info
+*.eggs
+
+# IDEs
+.idea
+*.swp
+.vscode
+
+# Operating Systems
 .DS_Store
-/Code/input.txt
-.idea/
+
+# Coverage Files
+htmlcov
+.coverage*
+
+# pytest cache
+.pytest_cache/
+
+# virtualenv
+.Python
+bin/
+lib/
+include/
+
+.tox
