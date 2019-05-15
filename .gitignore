@@ -1,6 +1,7 @@
 src/config.py
 src/Data
 Data
+data
 src/input.txt
 input.txt
 
@@ -48,3 +49,4 @@ lib/
 include/
 
 .tox
+geckodriver.log

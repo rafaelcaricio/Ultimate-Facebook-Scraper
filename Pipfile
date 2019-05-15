@@ -8,6 +8,7 @@ pylint = "*"
 
 [packages]
 selenium = "*"
+pillow = "*"
 
 [requires]
 python_version = "3.7"
