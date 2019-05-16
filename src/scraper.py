@@ -1,16 +1,24 @@
 import calendar
 import os
+import os.path
 import platform
 import sys
 import urllib.request
 import time
+import json
+import math
+import base64
+import logging
 try:
-    import config
+    import config as config_values
 except ImportError:
     raise RuntimeError("Please create config.py based on config-sample.py")
 
+from typing import List
+from PIL import Image
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -19,10 +27,14 @@ from selenium.webdriver.support.ui import WebDriverWait
 # -------------------------------------------------------------
 # -------------------------------------------------------------
 
+Image.MAX_IMAGE_PIXELS = None
 
 # Global Variables
 
 driver = None
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 # whether to download photos or not
 download_uploaded_photos = True 
@@ -39,6 +51,9 @@ current_scrolls = 0
 scroll_time = 5
 
 old_height = 0
+
+class Config:
+    data_folder = 'data'
 
 
 # -------------------------------------------------------------
@@ -132,18 +147,22 @@ def scroll():
     global old_height
     current_scrolls = 0
 
-    while (True):
+    while True:
         try:
             if current_scrolls == total_scrolls:
-                return
+                break
 
             old_height = driver.execute_script("return document.body.scrollHeight")
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             WebDriverWait(driver, scroll_time, 0.05).until(lambda driver: check_height())
             current_scrolls += 1
+
+            if current_scrolls % 100 == 0:
+                continue_answer_text = input("continue scrolling (Y/n): ")
+                if continue_answer_text.lower().strip() not in ('', 'y', 'yes',):
+                    break
         except TimeoutException:
             break
-
     return
 
 
@@ -155,20 +174,25 @@ def scroll():
 def get_status(x):
     status = ""
     try:
-        status = x.find_element_by_xpath(".//div[@class='_5wj-']").text
+        #status = x.find_element_by_xpath(".//div[@class='_5wj-']").text
+        status = x.find_element_by_css_selector("._5wj-").text
     except:
+        #log.exception("selector ._5wj- not found")
         try:
-            status = x.find_element_by_xpath(".//div[@class='userContent']").text
+            #status = x.find_element_by_xpath(".//div[@class='userContent']").text
+            status = x.find_element_by_css_selector(".userContent").text
         except:
+            log.exception("selector .userContent not found")
             pass
     return status
 
 
 def get_div_links(x, tag):
     try:
-        temp = x.find_element_by_xpath(".//div[@class='_3x-2']")
+        temp = x.find_element_by_css_selector("._3x-2")
         return temp.find_element_by_tag_name(tag)
     except:
+        log.exception("selector ._3x-2 not found")
         return ""
 
 
@@ -197,10 +221,10 @@ def get_time(x):
     time = ""
     try:
         time = x.find_element_by_tag_name('abbr').get_attribute('title')
-        time = str("%02d" % int(time.split(", ")[1].split()[1]), ) + "-" + str(
-            ("%02d" % (int((list(calendar.month_abbr).index(time.split(", ")[1].split()[0][:3]))),))) + "-" + \
-               time.split()[3] + " " + str("%02d" % int(time.split()[5].split(":")[0])) + ":" + str(
-            time.split()[5].split(":")[1])
+        date, hour, daytime = time.split()
+        month, day, year = date.split('/')
+        year = year.strip(',')
+        time = "20{}-{:02d}-{:02d}T{}{}".format(year, int(month), int(day), hour, daytime)
     except:
         pass
 
@@ -208,12 +232,76 @@ def get_time(x):
         return time
 
 
-def extract_and_write_posts(elements, filename):
-    try:
-        f = open(filename, "w", newline='\r\n')
-        f.writelines(' TIME || TYPE  || TITLE || STATUS  ||   LINKS(Shared Posts/Shared Links etc) ' + '\n' + '\n')
+def fullpage_screenshot():
+    global driver
+    print("Starting chrome full page screenshot workaround ...")
 
-        for x in elements:
+    driver.execute_script("document.querySelector('._50ti').setAttribute('style', 'position: absolute !important;');")
+    driver.execute_script("document.querySelector('.fixed_elem').setAttribute('style', 'position: absolute !important;');")
+
+    total_width = driver.execute_script("return document.body.offsetWidth * window.devicePixelRatio")
+    total_height = driver.execute_script("return document.body.parentNode.scrollHeight * window.devicePixelRatio")
+    viewport_width = driver.execute_script("return window.innerWidth * window.devicePixelRatio")
+    viewport_height = driver.execute_script("return window.innerHeight * window.devicePixelRatio")
+
+    print("Total: ({0}, {1}), Viewport: ({2},{3})".format(total_width, total_height,viewport_width,viewport_height))
+    rectangles = []
+
+    i = 0
+    while i < total_height:
+        ii = 0
+        top_height = i + viewport_height
+
+        if top_height > total_height:
+            top_height = total_height
+
+        while ii < total_width:
+            top_width = ii + viewport_width
+
+            if top_width > total_width:
+                top_width = total_width
+
+            print("Appending rectangle ({0},{1},{2},{3})".format(ii, i, top_width, top_height))
+            rectangles.append((ii, i, top_width,top_height))
+
+            ii = ii + viewport_width
+
+        i = i + viewport_height
+
+    part = 0
+    for rectangle in rectangles:
+        driver.execute_script("window.scrollTo({0}, {1})".format(rectangle[0] / 2, rectangle[1] / 2))
+        print("Scrolled To ({0},{1})".format(rectangle[0] / 2, rectangle[1] / 2))
+        time.sleep(0.1)
+
+        file_name = "part_{0}.png".format(part)
+        print("Capturing {0} ...".format(file_name))
+
+        driver.get_screenshot_as_file(os.path.abspath(file_name))
+
+        if rectangle[1] + viewport_height > total_height:
+            offset = (rectangle[0], total_height - viewport_height)
+        else:
+            offset = (rectangle[0], rectangle[1])
+
+        print("Image for offset ({0}, {1})".format(offset[0],offset[1]))
+        part = part + 1
+
+    print("Finishing chrome full page screenshot workaround...")
+    return True
+
+
+def extract_and_write_posts(elements: List[WebElement], filename: str):
+    global driver
+
+    fullpage_screenshot()
+    viewport_height = driver.execute_script("return window.innerHeight * window.devicePixelRatio")
+    pixel_ratio = driver.execute_script("return window.devicePixelRatio")
+
+    try:
+        f = open(filename, "a", newline='\r\n')
+
+        for x in elements:  # type: WebElement
             try:
                 video_link = " "
                 title = " "
@@ -232,6 +320,7 @@ def extract_and_write_posts(elements, filename):
                     title = get_title(x)
 
                 status = get_status(x)
+
                 if title.text == driver.find_element_by_id("fb-timeline-cover-name").text:
                     if status == '':
                         temp = get_div_links(x, "img")
@@ -276,19 +365,75 @@ def extract_and_write_posts(elements, filename):
                 status = status.replace("\n", " ")
                 title = title.replace("\n", " ")
 
-                line = str(time) + " || " + str(type) + ' || ' + str(title) + ' || ' + str(status) + ' || ' + str(
-                    link) + "\n"
+                location = x.location
+                size = x.size
+                _x = location['x'] * pixel_ratio
+                y = location['y'] * pixel_ratio
+                w = size['width'] * pixel_ratio
+                h = size['height'] * pixel_ratio
+                width = _x + w
+                height = y + h
+
+                screenshot_filename = str(time) + '_' + base64.urlsafe_b64encode(str(time).encode()).decode('utf-8') + '.png'
+                screenshot_filepath = os.path.abspath(screenshot_filename)
+
+                #im = load_image_for_page_range(_x, height)
+                # calculate where is _x (e.g. it is in part_234.png)
+                start_part = math.floor(y * 1. / viewport_height)
+                # do the same to figure where is height
+                end_part = math.floor(height * 1. / viewport_height)
+                # crop parts of the part_X.png images
+
+                stitched_image = Image.new('RGB', (w, h))
+                current_height = 0
+                # post is present in more than one scrow viewport
+                for part_idx in range(start_part, end_part + 1):
+                    # height until current viewport
+                    height_offset = viewport_height * part_idx
+
+                    # calculate part of the post coordinates in the current viewport
+                    top_x = _x
+                    top_y = max(0, y - height_offset)
+                    bottom_x = width
+                    bottom_y = min(viewport_height, height - height_offset)
+
+                    offset = (top_x, top_y, bottom_x, bottom_y)
+
+                    source_img_path = os.path.abspath("part_{0}.png".format(part_idx))
+                    source_img = Image.open(source_img_path)
+
+                    log.info("crop dimensions from source \"%s\": top_x=%d top_y=%d bottom_x=%d bottom_y=%d" % (source_img_path,
+                        offset[0], offset[1], offset[2], offset[3]))
+
+                    post_source_img = source_img.crop(offset)
+                    log.info("current_height = {}".format(current_height))
+                    stitched_image.paste(post_source_img, (0, current_height))
+                    # save height of the post already added to stitched image
+                    # next loop we know where to paste the rest of the post image
+                    current_height = current_height + (bottom_y - top_y)
+
+                # save final image after all pices are gathered
+                log.info("Saving screenshot at "+ screenshot_filepath)
+                stitched_image.save(screenshot_filepath)
+
+                line = json.dumps({
+                    'time': str(time),
+                    'type': str(type),
+                    'title': str(title),
+                    'status': str(status),
+                    'link': str(link),
+                    'screenshot_file': screenshot_filename
+                }) + '\n'
 
                 try:
                     f.writelines(line)
                 except:
                     print('Posts: Could not map encoded characters')
             except:
-                pass
+                log.exception("something happened")
         f.close()
     except:
         print("Exception (extract_and_write_posts)", "Status =", sys.exc_info()[0])
-
     return
 
 
@@ -310,7 +455,7 @@ def save_to_file(name, elements, status, current_section):
         f = None  # file pointer
 
         if status != 4:
-            f = open(name, 'w', encoding='utf-8', newline='\r\n')
+            f = open(name, 'a', encoding='utf-8', newline='\n')
 
         results = []
         img_names = []
@@ -411,6 +556,7 @@ def save_to_file(name, elements, status, current_section):
         f.close()
 
     except:
+        log.exception("save_to_file")
         print("Exception (save_to_file)", "Status =", str(status), sys.exc_info()[0])
 
     return
@@ -419,7 +565,7 @@ def save_to_file(name, elements, status, current_section):
 # ----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-def scrap_data(id, scan_list, section, elements_path, save_status, file_names):
+def scrap_data(id: str, scan_list: List[str], section: List[str], elements_path: List[str], save_status: int, file_names: List[str]) -> None:
     """Given some parameters, this function can scrap friends/photos/videos/about/posts(statuses) of a profile"""
     page = []
 
@@ -456,7 +602,7 @@ def scrap_data(id, scan_list, section, elements_path, save_status, file_names):
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-def create_original_link(url):
+def create_original_link(url: str) -> str:
     if url.find(".php") != -1:
         original_link = "https://en-gb.facebook.com/" + ((url.split("="))[1])
 
@@ -476,8 +622,8 @@ def create_original_link(url):
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-def scrap_profile(ids):
-    folder = os.path.join(os.getcwd(), "Data")
+def scrap_profile(ids: List[str], config: Config) -> None:
+    folder = os.path.join(os.getcwd(), config.data_folder)
 
     if not os.path.exists(folder):
         os.mkdir(folder)
@@ -518,8 +664,8 @@ def scrap_profile(ids):
                          "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
                          "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
                          "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a"]
-        file_names = ["All Friends.txt", "Mutual.txt", "Following.txt", "Followers.txt", "Work Friends.txt", "College Friends.txt",
-                      "Current City Friends.txt", "Hometown Friends.txt"]
+        file_names = ["all-friends.txt", "mutual.txt", "following.txt", "followers.txt", "work-friends.txt", "college-friends.txt",
+                      "current-city-friends.txt", "hometown-friends.txt"]
         save_status = 0
 
         scrap_data(id, scan_list, section, elements_path, save_status, file_names)
@@ -535,7 +681,7 @@ def scrap_profile(ids):
         scan_list = ["'s Photos", "Photos of"]
         section = ["/photos_all", "/photos_of"]
         elements_path = ["//*[contains(@id, 'pic_')]"] * 2
-        file_names = ["Uploaded Photos.txt", "Tagged Photos.txt"]
+        file_names = ["uploaded-photos.txt", "tagged-photos.txt"]
         save_status = 1
 
         scrap_data(id, scan_list, section, elements_path, save_status, file_names)
@@ -549,7 +695,7 @@ def scrap_profile(ids):
         scan_list = ["'s Videos", "Videos of"]
         section = ["/videos_by", "/videos_of"]
         elements_path = ["//*[contains(@id, 'pagelet_timeline_app_collection_')]/ul"] * 2
-        file_names = ["Uploaded Videos.txt", "Tagged Videos.txt"]
+        file_names = ["uploaded-videos.txt", "tagged-videos.txt"]
         save_status = 2
 
         scrap_data(id, scan_list, section, elements_path, save_status, file_names)
@@ -564,8 +710,8 @@ def scrap_profile(ids):
                    "/about?section=contact-info", "/about?section=relationship", "/about?section=bio",
                    "/about?section=year-overviews"]
         elements_path = ["//*[contains(@id, 'pagelet_timeline_app_collection_')]/ul/li/div/div[2]/div/div"] * 7
-        file_names = ["Overview.txt", "Work and Education.txt", "Places Lived.txt", "Contact and Basic Info.txt",
-                      "Family and Relationships.txt", "Details About.txt", "Life Events.txt"]
+        file_names = ["overview.txt", "work-and-education.txt", "places-lived.txt", "contact-and-basic-info.txt",
+                      "family-and-relationships.txt", "details-about.txt", "life-events.txt"]
         save_status = 3
 
         scrap_data(id, scan_list, section, elements_path, save_status, file_names)
@@ -579,7 +725,7 @@ def scrap_profile(ids):
         section = []
         elements_path = ['//div[@class="_5pcb _4b0l _2q8l"]']
 
-        file_names = ["Posts.txt"]
+        file_names = ["posts.txt"]
         save_status = 4
 
         scrap_data(id, scan_list, section, elements_path, save_status, file_names)
@@ -601,7 +747,7 @@ def safe_find_element_by_id(driver, elem_id):
     except NoSuchElementException:
         return None
 
-def login(email, password):
+def login(email: str, password: str) -> None:
     """ Logging into our own profile """
 
     try:
@@ -626,7 +772,7 @@ def login(email, password):
                   "http://chromedriver.chromium.org/downloads"
                   "\nYour OS: {}".format(platform_)
                  )
-            exit()
+            exit(1)
 
         driver.get("https://en-gb.facebook.com")
         driver.maximize_window()
@@ -653,23 +799,25 @@ def login(email, password):
 
             driver.find_element_by_id('checkpointSubmitButton').click()
 
-    except Exception as e:
+    except Exception:
         print("There's some error in log in.")
         print(sys.exc_info()[0])
-        exit()
+        exit(1)
 
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
 def main():
-    ids = ["https://en-gb.facebook.com/" + line.split("/")[-1] for line in open("input.txt", newline='\n')]
+    config = Config()
+
+    ids: List[str] = ["https://en-gb.facebook.com/" + line.split("/")[-1] for line in open("input.txt", newline='\n')]
 
     if len(ids) > 0:
         print("\nStarting Scraping...")
 
-        login(config.email, config.password)
-        scrap_profile(ids)
+        login(config_values.email, config_values.password)
+        scrap_profile(ids, config)
         driver.close()
     else:
         print("Input file is empty..")
