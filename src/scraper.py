@@ -1,20 +1,23 @@
 import calendar
 import os
+import re
 import os.path
 import platform
 import sys
 import urllib.request
 import time
+import datetime
 import json
 import math
 import base64
 import logging
+from time import strptime
 try:
     import config as config_values
 except ImportError:
     raise RuntimeError("Please create config.py based on config-sample.py")
 
-from typing import List
+from typing import List, Set, Tuple, Optional
 from PIL import Image
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
@@ -23,6 +26,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.action_chains import ActionChains
 
 # -------------------------------------------------------------
 # -------------------------------------------------------------
@@ -33,7 +37,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 driver = None
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 
 # whether to download photos or not
@@ -59,76 +63,76 @@ class Config:
 # -------------------------------------------------------------
 # -------------------------------------------------------------
 
-def get_facebook_images_url(img_links):
-    urls = []
+# def get_facebook_images_url(img_links):
+#     urls = []
 
-    for link in img_links:
+#     for link in img_links:
 
-        if link != "None":
-            valid_url_found = False
-            driver.get(link)
+#         if link != "None":
+#             valid_url_found = False
+#             driver.get(link)
 
-            try:
-                while not valid_url_found:
-                    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "spotlight")))
-                    element = driver.find_element_by_class_name("spotlight")
-                    img_url = element.get_attribute('src')
+#             try:
+#                 while not valid_url_found:
+#                     WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "spotlight")))
+#                     element = driver.find_element_by_class_name("spotlight")
+#                     img_url = element.get_attribute('src')
 
-                    if img_url.find('.gif') == -1:
-                        valid_url_found = True
-                        urls.append(img_url)
+#                     if img_url.find('.gif') == -1:
+#                         valid_url_found = True
+#                         urls.append(img_url)
 
-            except EC.StaleElementReferenceException:
-                urls.append(driver.find_element_by_class_name("spotlight").get_attribute('src'))
+#             except EC.StaleElementReferenceException:
+#                 urls.append(driver.find_element_by_class_name("spotlight").get_attribute('src'))
 
-            except:
-                print("Exception (facebook_image_downloader):", sys.exc_info()[0])
+#             except:
+#                 print("Exception (facebook_image_downloader):", sys.exc_info()[0])
 
-        else:
-            urls.append("None")
+#         else:
+#             urls.append("None")
 
-    return urls
+#     return urls
 
 
 # -------------------------------------------------------------
 # -------------------------------------------------------------
 
 # takes a url and downloads image from that url
-def image_downloader(img_links, folder_name):
-    img_names = []
+# def image_downloader(img_links, folder_name):
+#     img_names = []
 
-    try:
-        parent = os.getcwd()
-        try:
-            folder = os.path.join(os.getcwd(), folder_name)
-            if not os.path.exists(folder):
-                os.mkdir(folder)
+#     try:
+#         parent = os.getcwd()
+#         try:
+#             folder = os.path.join(os.getcwd(), folder_name)
+#             if not os.path.exists(folder):
+#                 os.mkdir(folder)
 
-            os.chdir(folder)
-        except:
-            print("Error in changing directory")
+#             os.chdir(folder)
+#         except:
+#             print("Error in changing directory")
 
-        for link in img_links:
-            img_name = "None"
+#         for link in img_links:
+#             img_name = "None"
 
-            if link != "None":
-                img_name = (link.split('.jpg')[0]).split('/')[-1] + '.jpg'
+#             if link != "None":
+#                 img_name = (link.split('.jpg')[0]).split('/')[-1] + '.jpg'
 
-                if img_name == "10354686_10150004552801856_220367501106153455_n.jpg":
-                    img_name = "None"
-                else:
-                    try:
-                        urllib.request.urlretrieve(link, img_name)
-                    except:
-                        img_name = "None"
+#                 if img_name == "10354686_10150004552801856_220367501106153455_n.jpg":
+#                     img_name = "None"
+#                 else:
+#                     try:
+#                         urllib.request.urlretrieve(link, img_name)
+#                     except:
+#                         img_name = "None"
 
-            img_names.append(img_name)
+#             img_names.append(img_name)
 
-        os.chdir(parent)
-    except:
-        print("Exception (image_downloader):", sys.exc_info()[0])
+#         os.chdir(parent)
+#     except:
+#         print("Exception (image_downloader):", sys.exc_info()[0])
 
-    return img_names
+#     return img_names
 
 
 # -------------------------------------------------------------
@@ -143,13 +147,16 @@ def check_height():
 # -------------------------------------------------------------
 
 # helper function: used to scroll the page
-def scroll():
+def scroll(number_of_scrolls=total_scrolls, until_func=None):
     global old_height
     current_scrolls = 0
 
     while True:
         try:
-            if current_scrolls == total_scrolls:
+            if current_scrolls == number_of_scrolls:
+                break
+
+            if until_func and until_func():
                 break
 
             old_height = driver.execute_script("return document.body.scrollHeight")
@@ -157,7 +164,7 @@ def scroll():
             WebDriverWait(driver, scroll_time, 0.05).until(lambda driver: check_height())
             current_scrolls += 1
 
-            if current_scrolls % 100 == 0:
+            if current_scrolls % 100000 == 0:
                 continue_answer_text = input("continue scrolling (Y/n): ")
                 if continue_answer_text.lower().strip() not in ('', 'y', 'yes',):
                     break
@@ -232,7 +239,7 @@ def get_time(x):
         return time
 
 
-def fullpage_screenshot():
+def fullpage_screenshot(year: int):
     global driver
     print("Starting chrome full page screenshot workaround ...")
 
@@ -274,8 +281,8 @@ def fullpage_screenshot():
         print("Scrolled To ({0},{1})".format(rectangle[0] / 2, rectangle[1] / 2))
         time.sleep(0.1)
 
-        file_name = "part_{0}.png".format(part)
-        print("Capturing {0} ...".format(file_name))
+        file_name = f"part_{year}_{part}.png"
+        log.info(f"Capturing {file_name} ...")
 
         driver.get_screenshot_as_file(os.path.abspath(file_name))
 
@@ -288,315 +295,485 @@ def fullpage_screenshot():
         part = part + 1
 
     print("Finishing chrome full page screenshot workaround...")
+
+    driver.execute_script("document.querySelector('._50ti').setAttribute('style', '');")
+    driver.execute_script("document.querySelector('.fixed_elem').setAttribute('style', '');")
     return True
 
+class ProfilePage:
+    """Operations available in the profile page."""
+    def __init__(self, page):
+        self.page = page
 
-def extract_and_write_posts(elements: List[WebElement], filename: str):
+    def scroll_to_visible_posts_at(self, year: int) -> None:
+        """Scroll to make all posts for month and year provided visible in current loaded page."""
+        def _scroll_until():
+            try:
+                for turn_year in self.page.find_elements_by_css_selector("._4-u2._3-96._4-u8"):
+                    if turn_year:
+                        text = str(turn_year.text)
+                        log.info(text)
+                        current_year = int(text.split()[-1])
+                        if current_year < year:
+                            return True
+            except:
+                return False
+            return False
+        scroll(until_func=_scroll_until)
+
+    def current_posts_years(self) -> List[int]:
+        """Scans the posts present in page and return the years."""
+        years = set()
+        for post_date in self.page.find_elements_by_css_selector("#timeline_story_column .b_1ci9vn0md ._5ptz[data-utime]"):
+            years.add(datetime.datetime.fromtimestamp(int(post_date.get_attribute("data-utime"))).year)
+        return sorted(list(years))
+
+    def get_all_posts(self) -> List['ProfilePost']:
+        elements = self.page.find_elements_by_xpath('//div[@class="_5pcb _4b0l _2q8l"]')
+        posts = []
+        for element in elements:
+            posts.append(ProfilePost(element))
+        return posts
+
+    def get_all_available_years(self) -> List[int]:
+        """Get all available years to choose in profile."""
+        years_options = self.page.find_elements_by_css_selector(".fbStickyHeaderBreadcrumb .sectionMenu option")
+        years_available = set()
+        for year_opt in years_options:
+            value = year_opt.get_attribute("value")
+            if re.match(r"^year_[0-9]+$", value):
+                years_available.add(int(value.replace("year_", "")))
+        return sorted(list(years_available))
+
+    def select_year(self, year: int) -> None:
+        # make menu visible
+        scroll(1)
+        # open years selection
+        self.page.find_element_by_css_selector(".fbStickyHeaderBreadcrumb .sectionMenu").click()
+        # select provided year
+        self.page.find_element_by_css_selector(f".fbStickyHeaderBreadcrumb .sectionMenu li[data-label=\"{year}\"]").click()
+
+
+class ProfilePost:
+    def __init__(self, post_element: WebElement):
+        self.post_element = post_element
+
+    def expand_comments(self) -> None:
+        global driver
+        expand_link = self.post_element.find_elements_by_css_selector("._4sxc._42ft")
+        if expand_link:
+            driver.execute_script("arguments[0].click();", expand_link[0])
+            time.sleep(0.2)
+
+    def get_datetime(self) -> Optional[datetime.datetime]:
+        try:
+            post_date = self.post_element.find_element_by_css_selector(".b_1ci9vn0md ._5ptz[data-utime]")
+            return datetime.datetime.fromtimestamp(int(post_date.get_attribute("data-utime")))
+        except NoSuchElementException:
+            return None
+
+    def is_original(self) -> bool:
+        """Check if post is original or a shared post from someone else."""
+        re_share_bar = self.post_element.find_elements_by_css_selector(".mtm._5pcm")
+        if re_share_bar:
+            return False
+        return True
+
+    def get_text(self) -> str:
+        try:
+            return self.post_element.find_element_by_css_selector("._1w_m").text
+        except NoSuchElementException:
+            return self.post_element.text
+
+    def save(self, year: int) -> str:
+        """Select post in screenshot, cut, and save."""
+        viewport_height = driver.execute_script("return window.innerHeight * window.devicePixelRatio")
+        pixel_ratio = driver.execute_script("return window.devicePixelRatio")
+        x = self.post_element
+        time = self.get_datetime() or year
+        location = x.location
+        size = x.size
+        _x = location['x'] * pixel_ratio
+        y = location['y'] * pixel_ratio
+        w = size['width'] * pixel_ratio
+        h = size['height'] * pixel_ratio
+        width = _x + w
+        height = y + h
+
+        screenshot_filename = str(time) + '_' + base64.urlsafe_b64encode(self.get_text().encode()).decode('utf-8')[:45] + '.png'
+        screenshot_filepath = os.path.abspath(screenshot_filename)
+
+        #im = load_image_for_page_range(_x, height)
+        # calculate where is _x (e.g. it is in part_234.png)
+        start_part = math.floor(y * 1. / viewport_height)
+        # do the same to figure where is height
+        end_part = math.floor(height * 1. / viewport_height)
+        # crop parts of the part_X.png images
+
+        stitched_image = Image.new('RGB', (w, h))
+        current_height = 0
+        # post is present in more than one scrow viewport
+        for part_idx in range(start_part, end_part + 1):
+            # height until current viewport
+            height_offset = viewport_height * part_idx
+
+            # calculate part of the post coordinates in the current viewport
+            top_x = _x
+            top_y = max(0, y - height_offset)
+            bottom_x = width
+            bottom_y = min(viewport_height, height - height_offset)
+
+            offset = (top_x, top_y, bottom_x, bottom_y)
+
+            source_img_path = os.path.abspath(f"part_{year}_{part_idx}.png")
+            try:
+                source_img = Image.open(source_img_path)
+            except FileNotFoundError as exp:
+                log.error(f"Could not open file {source_img_path}: {exp}")
+                continue
+
+            log.info("crop dimensions from source \"%s\": top_x=%d top_y=%d bottom_x=%d bottom_y=%d" % (source_img_path,
+                offset[0], offset[1], offset[2], offset[3]))
+
+            post_source_img = source_img.crop(offset)
+            log.info("current_height = {}".format(current_height))
+            stitched_image.paste(post_source_img, (0, current_height))
+            # save height of the post already added to stitched image
+            # next loop we know where to paste the rest of the post image
+            current_height = current_height + (bottom_y - top_y)
+
+        # save final image after all pices are gathered
+        log.info("Saving screenshot at "+ screenshot_filepath)
+        stitched_image.save(screenshot_filepath)
+        return screenshot_filename
+
+
+def extract_and_write_posts(profile_url: str, filename: str):
     global driver
 
-    fullpage_screenshot()
-    viewport_height = driver.execute_script("return window.innerHeight * window.devicePixelRatio")
-    pixel_ratio = driver.execute_script("return window.devicePixelRatio")
+    driver.get(profile_url)
 
-    try:
-        f = open(filename, "a", newline='\r\n')
+    with open("posts.txt", "a+") as file_out:
+        profile = ProfilePage(driver)
+        for year in profile.get_all_available_years():
+            profile.select_year(year)
+            profile.scroll_to_visible_posts_at(year)
+            for post in profile.get_all_posts():
+                if post.is_original():
+                    post.expand_comments()
+            fullpage_screenshot(year)
+            for post in profile.get_all_posts():
+                filename = post.save(year)
+                file_out.write(json.dumps({
+                    "text": post.get_text(),
+                    "screenshot_file": filename
+                }) + '\n')
+            driver.get(profile_url)
 
-        for x in elements:  # type: WebElement
-            try:
-                video_link = " "
-                title = " "
-                status = " "
-                link = ""
-                img = " "
-                time = " "
+    # scroll(1)
+    # elements = driver.find_elements_by_xpath('//div[@class="_5pcb _4b0l _2q8l"]')
 
-                # time
-                time = get_time(x)
+    # fullpage_screenshot()
+    # viewport_height = driver.execute_script("return window.innerHeight * window.devicePixelRatio")
+    # pixel_ratio = driver.execute_script("return window.devicePixelRatio")
 
-                # title
-                title = get_title(x)
-                if title.text.find("shared a memory") != -1:
-                    x = x.find_element_by_xpath(".//div[@class='_1dwg _1w_m']")
-                    title = get_title(x)
+    # try:
+    #     f = open(filename, "a", newline='\n')
 
-                status = get_status(x)
+    #     for x in elements:  # type: WebElement
+    #         try:
+    #             title = " "
+    #             status = " "
+    #             link = ""
+    #             time = " "
 
-                if title.text == driver.find_element_by_id("fb-timeline-cover-name").text:
-                    if status == '':
-                        temp = get_div_links(x, "img")
-                        if temp == '':  # no image tag which means . it is not a life event
-                            link = get_div_links(x, "a").get_attribute('href')
-                            type = "status update without text"
-                        else:
-                            type = 'life event'
-                            link = get_div_links(x, "a").get_attribute('href')
-                            status = get_div_links(x, "a").text
-                    else:
-                        type = "status update"
-                        if get_div_links(x, "a") != '':
-                            link = get_div_links(x, "a").get_attribute('href')
+    #             # time
+    #             time = get_time(x)
 
-                elif title.text.find(" shared ") != -1:
+    #             # title
+    #             title = get_title(x)
+    #             if title.text.find("shared a memory") != -1:
+    #                 x = x.find_element_by_xpath(".//div[@class='_1dwg _1w_m']")
+    #                 title = get_title(x)
 
-                    x1, link = get_title_links(title)
-                    type = "shared " + x1
+    #             status = get_status(x)
 
-                elif title.text.find(" at ") != -1 or title.text.find(" in ") != -1:
-                    if title.text.find(" at ") != -1:
-                        x1, link = get_title_links(title)
-                        type = "check in"
-                    elif title.text.find(" in ") != 1:
-                        status = get_div_links(x, "a").text
+    #             if title.text == driver.find_element_by_id("fb-timeline-cover-name").text:
+    #                 if status == '':
+    #                     temp = get_div_links(x, "img")
+    #                     if temp == '':  # no image tag which means . it is not a life event
+    #                         link = get_div_links(x, "a").get_attribute('href')
+    #                         type = "status update without text"
+    #                     else:
+    #                         type = 'life event'
+    #                         link = get_div_links(x, "a").get_attribute('href')
+    #                         status = get_div_links(x, "a").text
+    #                 else:
+    #                     type = "status update"
+    #                     if get_div_links(x, "a") != '':
+    #                         link = get_div_links(x, "a").get_attribute('href')
 
-                elif title.text.find(" added ") != -1 and title.text.find("photo") != -1:
-                    type = "added photo"
-                    link = get_div_links(x, "a").get_attribute('href')
+    #             elif title.text.find(" shared ") != -1:
 
-                elif title.text.find(" added ") != -1 and title.text.find("video") != -1:
-                    type = "added video"
-                    link = get_div_links(x, "a").get_attribute('href')
+    #                 x1, link = get_title_links(title)
+    #                 type = "shared " + x1
 
-                else:
-                    type = "others"
+    #             elif title.text.find(" at ") != -1 or title.text.find(" in ") != -1:
+    #                 if title.text.find(" at ") != -1:
+    #                     x1, link = get_title_links(title)
+    #                     type = "check in"
+    #                 elif title.text.find(" in ") != 1:
+    #                     status = get_div_links(x, "a").text
 
-                if not isinstance(title, str):
-                    title = title.text
+    #             elif title.text.find(" added ") != -1 and title.text.find("photo") != -1:
+    #                 type = "added photo"
+    #                 link = get_div_links(x, "a").get_attribute('href')
 
-                status = status.replace("\n", " ")
-                title = title.replace("\n", " ")
+    #             elif title.text.find(" added ") != -1 and title.text.find("video") != -1:
+    #                 type = "added video"
+    #                 link = get_div_links(x, "a").get_attribute('href')
 
-                location = x.location
-                size = x.size
-                _x = location['x'] * pixel_ratio
-                y = location['y'] * pixel_ratio
-                w = size['width'] * pixel_ratio
-                h = size['height'] * pixel_ratio
-                width = _x + w
-                height = y + h
+    #             else:
+    #                 type = "others"
 
-                screenshot_filename = str(time) + '_' + base64.urlsafe_b64encode(str(time).encode()).decode('utf-8') + '.png'
-                screenshot_filepath = os.path.abspath(screenshot_filename)
+    #             if not isinstance(title, str):
+    #                 title = title.text
 
-                #im = load_image_for_page_range(_x, height)
-                # calculate where is _x (e.g. it is in part_234.png)
-                start_part = math.floor(y * 1. / viewport_height)
-                # do the same to figure where is height
-                end_part = math.floor(height * 1. / viewport_height)
-                # crop parts of the part_X.png images
+    #             status = status.replace("\n", " ")
+    #             title = title.replace("\n", " ")
 
-                stitched_image = Image.new('RGB', (w, h))
-                current_height = 0
-                # post is present in more than one scrow viewport
-                for part_idx in range(start_part, end_part + 1):
-                    # height until current viewport
-                    height_offset = viewport_height * part_idx
+    #             location = x.location
+    #             size = x.size
+    #             _x = location['x'] * pixel_ratio
+    #             y = location['y'] * pixel_ratio
+    #             w = size['width'] * pixel_ratio
+    #             h = size['height'] * pixel_ratio
+    #             width = _x + w
+    #             height = y + h
 
-                    # calculate part of the post coordinates in the current viewport
-                    top_x = _x
-                    top_y = max(0, y - height_offset)
-                    bottom_x = width
-                    bottom_y = min(viewport_height, height - height_offset)
+    #             screenshot_filename = str(time) + '_' + base64.urlsafe_b64encode(str(time).encode()).decode('utf-8') + '.png'
+    #             screenshot_filepath = os.path.abspath(screenshot_filename)
 
-                    offset = (top_x, top_y, bottom_x, bottom_y)
+    #             #im = load_image_for_page_range(_x, height)
+    #             # calculate where is _x (e.g. it is in part_234.png)
+    #             start_part = math.floor(y * 1. / viewport_height)
+    #             # do the same to figure where is height
+    #             end_part = math.floor(height * 1. / viewport_height)
+    #             # crop parts of the part_X.png images
 
-                    source_img_path = os.path.abspath("part_{0}.png".format(part_idx))
-                    source_img = Image.open(source_img_path)
+    #             stitched_image = Image.new('RGB', (w, h))
+    #             current_height = 0
+    #             # post is present in more than one scrow viewport
+    #             for part_idx in range(start_part, end_part + 1):
+    #                 # height until current viewport
+    #                 height_offset = viewport_height * part_idx
 
-                    log.info("crop dimensions from source \"%s\": top_x=%d top_y=%d bottom_x=%d bottom_y=%d" % (source_img_path,
-                        offset[0], offset[1], offset[2], offset[3]))
+    #                 # calculate part of the post coordinates in the current viewport
+    #                 top_x = _x
+    #                 top_y = max(0, y - height_offset)
+    #                 bottom_x = width
+    #                 bottom_y = min(viewport_height, height - height_offset)
 
-                    post_source_img = source_img.crop(offset)
-                    log.info("current_height = {}".format(current_height))
-                    stitched_image.paste(post_source_img, (0, current_height))
-                    # save height of the post already added to stitched image
-                    # next loop we know where to paste the rest of the post image
-                    current_height = current_height + (bottom_y - top_y)
+    #                 offset = (top_x, top_y, bottom_x, bottom_y)
 
-                # save final image after all pices are gathered
-                log.info("Saving screenshot at "+ screenshot_filepath)
-                stitched_image.save(screenshot_filepath)
+    #                 source_img_path = os.path.abspath("part_{0}.png".format(part_idx))
+    #                 source_img = Image.open(source_img_path)
 
-                line = json.dumps({
-                    'time': str(time),
-                    'type': str(type),
-                    'title': str(title),
-                    'status': str(status),
-                    'link': str(link),
-                    'screenshot_file': screenshot_filename
-                }) + '\n'
+    #                 log.info("crop dimensions from source \"%s\": top_x=%d top_y=%d bottom_x=%d bottom_y=%d" % (source_img_path,
+    #                     offset[0], offset[1], offset[2], offset[3]))
 
-                try:
-                    f.writelines(line)
-                except:
-                    print('Posts: Could not map encoded characters')
-            except:
-                log.exception("something happened")
-        f.close()
-    except:
-        print("Exception (extract_and_write_posts)", "Status =", sys.exc_info()[0])
-    return
+    #                 post_source_img = source_img.crop(offset)
+    #                 log.info("current_height = {}".format(current_height))
+    #                 stitched_image.paste(post_source_img, (0, current_height))
+    #                 # save height of the post already added to stitched image
+    #                 # next loop we know where to paste the rest of the post image
+    #                 current_height = current_height + (bottom_y - top_y)
+
+    #             # save final image after all pices are gathered
+    #             log.info("Saving screenshot at "+ screenshot_filepath)
+    #             stitched_image.save(screenshot_filepath)
+
+    #             line = json.dumps({
+    #                 'time': str(time),
+    #                 'type': str(type),
+    #                 'title': str(title),
+    #                 'status': str(status),
+    #                 'link': str(link),
+    #                 'screenshot_file': screenshot_filename
+    #             }) + '\n'
+
+    #             try:
+    #                 f.writelines(line)
+    #             except:
+    #                 print('Posts: Could not map encoded characters')
+    #         except:
+    #             log.exception("something happened")
+    #     f.close()
+    # except:
+    #     print("Exception (extract_and_write_posts)", "Status =", sys.exc_info()[0])
+    # return
 
 
 # -------------------------------------------------------------
 # -------------------------------------------------------------
 
 
-def save_to_file(name, elements, status, current_section):
-    """helper function used to save links to files"""
+# def save_to_file(name, elements, status, current_section):
+#     """helper function used to save links to files"""
 
-    # status 0 = dealing with friends list
-    # status 1 = dealing with photos
-    # status 2 = dealing with videos
-    # status 3 = dealing with about section
-    # status 4 = dealing with posts
+#     # status 0 = dealing with friends list
+#     # status 1 = dealing with photos
+#     # status 2 = dealing with videos
+#     # status 3 = dealing with about section
+#     # status 4 = dealing with posts
 
-    try:
+#     try:
 
-        f = None  # file pointer
+#         f = None  # file pointer
 
-        if status != 4:
-            f = open(name, 'a', encoding='utf-8', newline='\n')
+#         if status != 4:
+#             f = open(name, 'a', encoding='utf-8', newline='\n')
 
-        results = []
-        img_names = []
+#         results = []
+#         img_names = []
 
-        # dealing with Friends
-        if status == 0:
-            results = [x.get_attribute('href') for x in elements]
-            results = [create_original_link(x) for x in results]
+#         # dealing with Friends
+#         if status == 0:
+#             results = [x.get_attribute('href') for x in elements]
+#             results = [create_original_link(x) for x in results]
 
-            try:
-                if download_friends_photos:
+#             try:
+#                 if download_friends_photos:
 
-                    if friends_small_size:
-                        img_links = [x.find_element_by_css_selector('img').get_attribute('src') for x in elements]
-                    else:
-                        links = []
-                        for friend in results:
-                            driver.get(friend)
-                            WebDriverWait(driver, 10).until(
-                                EC.presence_of_element_located((By.CLASS_NAME, "profilePicThumb")))
-                            l = driver.find_element_by_class_name("profilePicThumb").get_attribute('href')
-                            links.append(l)
+#                     if friends_small_size:
+#                         img_links = [x.find_element_by_css_selector('img').get_attribute('src') for x in elements]
+#                     else:
+#                         links = []
+#                         for friend in results:
+#                             driver.get(friend)
+#                             WebDriverWait(driver, 10).until(
+#                                 EC.presence_of_element_located((By.CLASS_NAME, "profilePicThumb")))
+#                             l = driver.find_element_by_class_name("profilePicThumb").get_attribute('href')
+#                             links.append(l)
 
-                        for i in range(len(links)):
-                            if links[i].find('picture/view') != -1:
-                                links[i] = "None"
+#                         for i in range(len(links)):
+#                             if links[i].find('picture/view') != -1:
+#                                 links[i] = "None"
 
-                        img_links = get_facebook_images_url(links)
+#                         img_links = get_facebook_images_url(links)
 
-                    folder_names = ["Friend's Photos", "Following's Photos", "Follower's Photos", "Work Friends Photos",
-                                    "College Friends Photos", "Current City Friends Photos", "Hometown Friends Photos"]
-                    print("Downloading " + folder_names[current_section])
+#                     folder_names = ["Friend's Photos", "Following's Photos", "Follower's Photos", "Work Friends Photos",
+#                                     "College Friends Photos", "Current City Friends Photos", "Hometown Friends Photos"]
+#                     print("Downloading " + folder_names[current_section])
 
-                    img_names = image_downloader(img_links, folder_names[current_section])
-            except:
-                print("Exception (Images)", str(status), "Status =", current_section, sys.exc_info()[0])
+#                     img_names = image_downloader(img_links, folder_names[current_section])
+#             except:
+#                 print("Exception (Images)", str(status), "Status =", current_section, sys.exc_info()[0])
 
-        # dealing with Photos
-        elif status == 1:
-            results = [x.get_attribute('href') for x in elements]
-            results.pop(0)
+#         # dealing with Photos
+#         elif status == 1:
+#             results = [x.get_attribute('href') for x in elements]
+#             results.pop(0)
 
-            try:
-                if download_uploaded_photos:
-                    if photos_small_size:
-                        background_img_links = driver.find_elements_by_xpath("//*[contains(@id, 'pic_')]/div/i")
-                        background_img_links = [x.get_attribute('style') for x in background_img_links]
-                        background_img_links = [((x.split('(')[1]).split(')')[0]).strip('"') for x in
-                                                background_img_links]
-                    else:
-                        background_img_links = get_facebook_images_url(results)
+#             try:
+#                 if download_uploaded_photos:
+#                     if photos_small_size:
+#                         background_img_links = driver.find_elements_by_xpath("//*[contains(@id, 'pic_')]/div/i")
+#                         background_img_links = [x.get_attribute('style') for x in background_img_links]
+#                         background_img_links = [((x.split('(')[1]).split(')')[0]).strip('"') for x in
+#                                                 background_img_links]
+#                     else:
+#                         background_img_links = get_facebook_images_url(results)
 
-                    folder_names = ["Uploaded Photos", "Tagged Photos"]
-                    print("Downloading " + folder_names[current_section])
+#                     folder_names = ["Uploaded Photos", "Tagged Photos"]
+#                     print("Downloading " + folder_names[current_section])
 
-                    img_names = image_downloader(background_img_links, folder_names[current_section])
-            except:
-                print("Exception (Images)", str(status), "Status =", current_section, sys.exc_info()[0])
+#                     img_names = image_downloader(background_img_links, folder_names[current_section])
+#             except:
+#                 print("Exception (Images)", str(status), "Status =", current_section, sys.exc_info()[0])
 
-        # dealing with Videos
-        elif status == 2:
-            results = elements[0].find_elements_by_css_selector('li')
-            results = [x.find_element_by_css_selector('a').get_attribute('href') for x in results]
+#         # dealing with Videos
+#         elif status == 2:
+#             results = elements[0].find_elements_by_css_selector('li')
+#             results = [x.find_element_by_css_selector('a').get_attribute('href') for x in results]
 
-            try:
-                if results[0][0] == '/':
-                    results = [r.pop(0) for r in results]
-                    results = [("https://en-gb.facebook.com/" + x) for x in results]
-            except:
-                pass
+#             try:
+#                 if results[0][0] == '/':
+#                     results = [r.pop(0) for r in results]
+#                     results = [("https://en-gb.facebook.com/" + x) for x in results]
+#             except:
+#                 pass
 
-        # dealing with About Section
-        elif status == 3:
-            results = elements[0].text
-            f.writelines(results)
+#         # dealing with About Section
+#         elif status == 3:
+#             results = elements[0].text
+#             f.writelines(results)
 
-        # dealing with Posts
-        elif status == 4:
-            extract_and_write_posts(elements, name)
-            return
+#         # dealing with Posts
+#         elif status == 4:
+#             extract_and_write_posts(elements, name)
+#             return
 
-        if (status == 0) or (status == 1):
-            for i in range(len(results)):
-                f.writelines(results[i])
-                f.write(',')
-                f.writelines(elements[i].find_element_by_tag_name("img").get_attribute("aria-label"))
-                f.write(',')
-                try:
-                    f.writelines(img_names[i])
-                except:
-                    f.writelines("None")
-                f.write('\n')
+#         if (status == 0) or (status == 1):
+#             for i in range(len(results)):
+#                 f.writelines(results[i])
+#                 f.write(',')
+#                 f.writelines(elements[i].find_element_by_tag_name("img").get_attribute("aria-label"))
+#                 f.write(',')
+#                 try:
+#                     f.writelines(img_names[i])
+#                 except:
+#                     f.writelines("None")
+#                 f.write('\n')
 
-        elif status == 2:
-            for x in results:
-                f.writelines(x + "\n")
+#         elif status == 2:
+#             for x in results:
+#                 f.writelines(x + "\n")
 
-        f.close()
+#         f.close()
 
-    except:
-        log.exception("save_to_file")
-        print("Exception (save_to_file)", "Status =", str(status), sys.exc_info()[0])
+#     except:
+#         log.exception("save_to_file")
+#         print("Exception (save_to_file)", "Status =", str(status), sys.exc_info()[0])
 
-    return
+#     return
 
 
 # ----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-def scrap_data(id: str, scan_list: List[str], section: List[str], elements_path: List[str], save_status: int, file_names: List[str]) -> None:
-    """Given some parameters, this function can scrap friends/photos/videos/about/posts(statuses) of a profile"""
-    page = []
+# def scrap_data(id: str, scan_list: List[str], section: List[str], elements_path: List[str], save_status: int, file_names: List[str]) -> None:
+#     """Given some parameters, this function can scrap friends/photos/videos/about/posts(statuses) of a profile"""
+#     page = []
 
-    if save_status == 4:
-        page.append(id)
+#     if save_status == 4:
+#         page.append(id)
 
-    for i in range(len(section)):
-        page.append(id + section[i])
+#     for i in range(len(section)):
+#         page.append(id + section[i])
 
-    for i in range(len(scan_list)):
-        try:
-            driver.get(page[i])
+#     for i in range(len(scan_list)):
+#         try:
+#             driver.get(page[i])
 
-            if (save_status == 0) or (save_status == 1) or (
-                    save_status == 2):  # Only run this for friends, photos and videos
+#             if (save_status == 0) or (save_status == 1) or (
+#                     save_status == 2):  # Only run this for friends, photos and videos
 
-                # the bar which contains all the sections
-                sections_bar = driver.find_element_by_xpath("//*[@class='_3cz'][1]/div[2]/div[1]")
+#                 # the bar which contains all the sections
+#                 sections_bar = driver.find_element_by_xpath("//*[@class='_3cz'][1]/div[2]/div[1]")
 
-                if sections_bar.text.find(scan_list[i]) == -1:
-                    continue
+#                 if sections_bar.text.find(scan_list[i]) == -1:
+#                     continue
 
-            if save_status != 3:
-                scroll()
+#             if save_status != 3:
+#                 scroll()
 
-            data = driver.find_elements_by_xpath(elements_path[i])
+#             data = driver.find_elements_by_xpath(elements_path[i])
 
-            save_to_file(file_names[i], data, save_status, i)
+#             save_to_file(file_names[i], data, save_status, i)
 
-        except:
-            print("Exception (scrap_data)", str(i), "Status =", str(save_status), sys.exc_info()[0])
+#         except:
+#             print("Exception (scrap_data)", str(i), "Status =", str(save_status), sys.exc_info()[0])
 
 
 # -----------------------------------------------------------------------------
@@ -641,94 +818,96 @@ def scrap_profile(ids: List[str], config: Config) -> None:
 
         try:
             target_dir = os.path.join(folder, id.split('/')[-1])
-            while os.path.exists(target_dir):
-                input("A folder with the same profile name already exists. Kindly remove that folder first and press Return.")
-            os.mkdir(target_dir)
+            #    input("A folder with the same profile name already exists. Kindly remove that folder first and press Return.")
+            if not os.path.exists(target_dir):
+                os.mkdir(target_dir)
             os.chdir(target_dir)
         except:
             print("Some error occurred in creating the profile directory.")
             continue
 
-        # ----------------------------------------------------------------------------
-        print("----------------------------------------")
-        print("Friends..")
-        # setting parameters for scrap_data() to scrap friends
-        scan_list = ["All", "Mutual Friends", "Following", "Followers", "Work", "College", "Current City", "Hometown"]
-        section = ["/friends", "/friends_mutual", "/following", "/followers", "/friends_work", "/friends_college", "/friends_current_city",
-                   "/friends_hometown"]
-        elements_path = ["//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
-        				 "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
-                         "//*[contains(@class,'_3i9')][1]/div/div/ul/li[1]/div[2]/div/div/div/div/div[2]/ul/li/div/a",
-                         "//*[contains(@class,'fbProfileBrowserListItem')]/div/a",
-                         "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
-                         "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
-                         "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
-                         "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a"]
-        file_names = ["all-friends.txt", "mutual.txt", "following.txt", "followers.txt", "work-friends.txt", "college-friends.txt",
-                      "current-city-friends.txt", "hometown-friends.txt"]
-        save_status = 0
+        # # ----------------------------------------------------------------------------
+        # print("----------------------------------------")
+        # print("Friends..")
+        # # setting parameters for scrap_data() to scrap friends
+        # scan_list = ["All", "Mutual Friends", "Following", "Followers", "Work", "College", "Current City", "Hometown"]
+        # section = ["/friends", "/friends_mutual", "/following", "/followers", "/friends_work", "/friends_college", "/friends_current_city",
+        #            "/friends_hometown"]
+        # elements_path = ["//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
+        # 				 "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
+        #                  "//*[contains(@class,'_3i9')][1]/div/div/ul/li[1]/div[2]/div/div/div/div/div[2]/ul/li/div/a",
+        #                  "//*[contains(@class,'fbProfileBrowserListItem')]/div/a",
+        #                  "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
+        #                  "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
+        #                  "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a",
+        #                  "//*[contains(@id,'pagelet_timeline_medley_friends')][1]/div[2]/div/ul/li/div/a"]
+        # file_names = ["all-friends.txt", "mutual.txt", "following.txt", "followers.txt", "work-friends.txt", "college-friends.txt",
+        #               "current-city-friends.txt", "hometown-friends.txt"]
+        # save_status = 0
 
-        scrap_data(id, scan_list, section, elements_path, save_status, file_names)
-        print("Friends Done")
+        # scrap_data(id, scan_list, section, elements_path, save_status, file_names)
+        # print("Friends Done")
 
 
-        # ----------------------------------------------------------------------------  
+        # # ----------------------------------------------------------------------------  
         
-        print("----------------------------------------")
-        print("Photos..")
-        print("Scraping Links..")
-        # setting parameters for scrap_data() to scrap photos
-        scan_list = ["'s Photos", "Photos of"]
-        section = ["/photos_all", "/photos_of"]
-        elements_path = ["//*[contains(@id, 'pic_')]"] * 2
-        file_names = ["uploaded-photos.txt", "tagged-photos.txt"]
-        save_status = 1
+        # print("----------------------------------------")
+        # print("Photos..")
+        # print("Scraping Links..")
+        # # setting parameters for scrap_data() to scrap photos
+        # scan_list = ["'s Photos", "Photos of"]
+        # section = ["/photos_all", "/photos_of"]
+        # elements_path = ["//*[contains(@id, 'pic_')]"] * 2
+        # file_names = ["uploaded-photos.txt", "tagged-photos.txt"]
+        # save_status = 1
 
-        scrap_data(id, scan_list, section, elements_path, save_status, file_names)
-        print("Photos Done")
+        # scrap_data(id, scan_list, section, elements_path, save_status, file_names)
+        # print("Photos Done")
 
-        # ----------------------------------------------------------------------------
+        # # ----------------------------------------------------------------------------
 
-        print("----------------------------------------")
-        print("Videos:")
-        # setting parameters for scrap_data() to scrap videos
-        scan_list = ["'s Videos", "Videos of"]
-        section = ["/videos_by", "/videos_of"]
-        elements_path = ["//*[contains(@id, 'pagelet_timeline_app_collection_')]/ul"] * 2
-        file_names = ["uploaded-videos.txt", "tagged-videos.txt"]
-        save_status = 2
+        # print("----------------------------------------")
+        # print("Videos:")
+        # # setting parameters for scrap_data() to scrap videos
+        # scan_list = ["'s Videos", "Videos of"]
+        # section = ["/videos_by", "/videos_of"]
+        # elements_path = ["//*[contains(@id, 'pagelet_timeline_app_collection_')]/ul"] * 2
+        # file_names = ["uploaded-videos.txt", "tagged-videos.txt"]
+        # save_status = 2
 
-        scrap_data(id, scan_list, section, elements_path, save_status, file_names)
-        print("Videos Done")
-        # ----------------------------------------------------------------------------
+        # scrap_data(id, scan_list, section, elements_path, save_status, file_names)
+        # print("Videos Done")
+        # # ----------------------------------------------------------------------------
 
-        print("----------------------------------------")
-        print("About:")
-        # setting parameters for scrap_data() to scrap the about section
-        scan_list = [None] * 7
-        section = ["/about?section=overview", "/about?section=education", "/about?section=living",
-                   "/about?section=contact-info", "/about?section=relationship", "/about?section=bio",
-                   "/about?section=year-overviews"]
-        elements_path = ["//*[contains(@id, 'pagelet_timeline_app_collection_')]/ul/li/div/div[2]/div/div"] * 7
-        file_names = ["overview.txt", "work-and-education.txt", "places-lived.txt", "contact-and-basic-info.txt",
-                      "family-and-relationships.txt", "details-about.txt", "life-events.txt"]
-        save_status = 3
+        # print("----------------------------------------")
+        # print("About:")
+        # # setting parameters for scrap_data() to scrap the about section
+        # scan_list = [None] * 7
+        # section = ["/about?section=overview", "/about?section=education", "/about?section=living",
+        #            "/about?section=contact-info", "/about?section=relationship", "/about?section=bio",
+        #            "/about?section=year-overviews"]
+        # elements_path = ["//*[contains(@id, 'pagelet_timeline_app_collection_')]/ul/li/div/div[2]/div/div"] * 7
+        # file_names = ["overview.txt", "work-and-education.txt", "places-lived.txt", "contact-and-basic-info.txt",
+        #               "family-and-relationships.txt", "details-about.txt", "life-events.txt"]
+        # save_status = 3
 
-        scrap_data(id, scan_list, section, elements_path, save_status, file_names)
-        print("About Section Done")
+        # scrap_data(id, scan_list, section, elements_path, save_status, file_names)
+        # print("About Section Done")
 
         # ----------------------------------------------------------------------------
         print("----------------------------------------")
         print("Posts:")
         # setting parameters for scrap_data() to scrap posts
-        scan_list = [None]
-        section = []
-        elements_path = ['//div[@class="_5pcb _4b0l _2q8l"]']
+        # scan_list = [None]
+        # section = []
+        # elements_path = ['//div[@class="_5pcb _4b0l _2q8l"]']
 
-        file_names = ["posts.txt"]
-        save_status = 4
+        # file_names = ["posts.txt"]
+        # save_status = 4
 
-        scrap_data(id, scan_list, section, elements_path, save_status, file_names)
+        #scrap_data(id, scan_list, section, elements_path, save_status, file_names)
+        extract_and_write_posts(profile_url=id, filename='posts_laser.txt')
+
         print("Posts(Statuses) Done")
         print("----------------------------------------")
     # ----------------------------------------------------------------------------

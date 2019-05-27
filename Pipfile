@@ -10,6 +10,7 @@ rope = "*"
 [packages]
 selenium = "*"
 pillow = "*"
+ipdb = "*"
 
 [requires]
 python_version = "3.7"
